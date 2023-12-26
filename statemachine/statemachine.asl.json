@@ -1,0 +1,36 @@
+{
+  "Comment": "A description of my state machine",
+  "StartAt": "Call third-party API",
+  "States": {
+    "Call third-party API": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Parameters": {
+        "Method": "POST",
+        "Transform": {
+          "RequestBodyEncoding": "URL_ENCODED"
+        },
+        "Headers": {
+          "content-type": "application/x-www-form-urlencoded"
+        },
+        "ApiEndpoint": "https://api.twilio.com/2010-04-01/Accounts/YOURTWILIOSID/Messages.json",
+        "Authentication": {
+          "ConnectionArn": "${ConnectionArn}"
+        },
+        "RequestBody.$": "$.sendsms"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "BackoffRate": 2,
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "End": true
+    }
+  }
+}

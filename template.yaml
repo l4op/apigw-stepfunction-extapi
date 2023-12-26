@@ -1,0 +1,117 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SERVERLESS EXTERNAL API INTEGRATOR
+
+  Serverless microservice that allows integration with a third party API
+
+Globals:
+  Function:
+    Timeout: 20
+    Runtime: java17
+    Architectures:
+      - arm64
+    MemorySize: 512
+    Environment:
+      Variables:
+        JAVA_TOOL_OPTIONS:  -XX:+TieredCompilation -XX:TieredStopAtLevel=1
+
+Resources:
+
+  IntegratorStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: EXPRESS
+      DefinitionUri: statemachine/statemachine.asl.json
+      DefinitionSubstitutions:
+        ConnectionArn: !GetAtt TwilioConnection.Arn
+      Policies:
+        - Statement:
+            - Sid: InvokeHTTPEndpointPolicy
+              Effect: Allow
+              Action:
+                - states:InvokeHttpEndpoint
+              Resource: '*'
+              Condition:
+                StringEquals:
+                  states:HTTPMethod: POST
+                StringLike:
+                  states:HTTPEndpoint: "https://api.twilio.com/*"
+        - Statement:
+            - Sid: RetrieveConnectionCredentialsPolicy
+              Effect: Allow
+              Action: events:RetrieveConnectionCredentials
+              Resource: '*'
+        - Statement:
+            - Sid: AccessSecretsManagerPolicy
+              Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+                - secretsmanager:DescribeSecret
+              Resource: "arn:aws:secretsmanager:*:*:secret:events!connection/*"
+        - Statement:
+          - Effect: Allow
+            Action:
+              - "cloudwatch:*"
+              - "logs:*"
+            Resource: "*"
+      Logging:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StateMachineLogGroup.Arn
+        IncludeExecutionData: false
+        Level: 'ALL'
+
+
+  StateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join [ "/", [ "stepfunctions", IntegratorStateMachine]]
+
+  TwilioConnection:
+    Type: AWS::Events::Connection
+    Properties:
+      AuthorizationType: BASIC
+      Description: 'Connection with an API key'
+      AuthParameters:
+        BasicAuthParameters:
+          Username: "{{resolve:ssm:/twilio_sid:1}}"
+          Password: "{{resolve:ssm:/twilio_secret:1}}"
+
+  #API Gateway created using SAM simple declaration
+  SmsServiceAPIGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: dev
+      Name: sms-service
+      DefinitionBody:
+        'Fn::Transform':
+          Name: 'AWS::Include'
+          Parameters:
+            Location: 'api.yaml'
+  RestApiRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: AllowSFNExec
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: "states:StartSyncExecution"
+                Resource: !GetAtt IntegratorStateMachine.Arn
+
+Outputs:
+  SmsServiceAPIGatewayEndpoint:
+    Description: SmsServiceAPIGateway Endpoint
+    Value:
+      Fn::Sub: https://${SmsServiceAPIGateway}.execute-api.${AWS::Region}.amazonaws.com
